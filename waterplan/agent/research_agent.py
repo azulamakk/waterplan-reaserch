@@ -104,6 +104,35 @@ def _build_dimension_result(
     )
 
 
+def _generate_summaries_fallback(
+    model: BaseChatModel, location: str, findings: dict
+) -> dict:
+    """Synthesize dimension summaries directly when the agent skipped finish_research."""
+    dim_labels = {
+        "water_stress": "water stress, scarcity, and physical water availability",
+        "incidents": "water-related incidents, crises, protests, and conflicts",
+        "regulations": "water regulations, industrial permits, and compliance requirements",
+    }
+    result: dict = {"confidence": 0.6}
+    for dim, label in dim_labels.items():
+        sources = findings.get(dim, [])
+        if not sources:
+            result[dim] = "No data available for this dimension."
+            continue
+        excerpts = "\n".join(f"- {s.excerpt}" for s in sources[:3])
+        prompt = (
+            f"Based ONLY on these verified source excerpts about {label} for {location}, "
+            f"write a 2-3 sentence factual summary. Do not speculate beyond the excerpts.\n\n"
+            f"{excerpts}\n\nSummary:"
+        )
+        try:
+            response = model.invoke([HumanMessage(content=prompt)])
+            result[dim] = response.content.strip()
+        except Exception:
+            result[dim] = "No summary available."
+    return result
+
+
 def _count_tokens_from_messages(messages: list) -> tuple[int, int]:
     """Rough token count from LangGraph message list for cost estimation."""
     input_tokens = 0
@@ -144,6 +173,14 @@ def research_location(
     result = _run_langgraph_agent(model, tools, user_message, verbose=verbose)
 
     elapsed_ms = (time.monotonic() - start) * 1000
+
+    # If the agent exited without calling finish_research (common with smaller models),
+    # synthesize summaries directly from the collected source excerpts.
+    raw_summaries = findings.get("__summaries__", {})
+    if not raw_summaries or not any(
+        raw_summaries.get(d) for d in ("water_stress", "incidents", "regulations")
+    ):
+        findings["__summaries__"] = _generate_summaries_fallback(model, location, findings)
 
     # Estimate cost from message content
     messages = result.get("messages", [])

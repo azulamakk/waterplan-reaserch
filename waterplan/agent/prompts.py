@@ -25,7 +25,12 @@ in your summary — do not invent data.
 3. For dimension REGULATIONS: call `search_water_risk` twice with different queries
 4. For each promising result: call `fetch_and_validate` to verify the excerpt exists
 5. For each validated source: call `record_finding` to record it
-6. Once all 3 dimensions have ≥ 2 validated sources: call `finish_research` with summaries
+6. Once all 3 dimensions have ≥ 2 validated sources, call `finish_research` with:
+   - water_stress_summary: 2-3 sentence synthesis of physical water stress for the location
+   - incidents_summary: 2-3 sentence synthesis of water incidents and conflicts found
+   - regulations_summary: 2-3 sentence synthesis of applicable water regulations
+   - overall_confidence: 0.0-1.0 (use 0.8 if all sources validated, lower if some failed)
+   You MUST call finish_research — it is the only way summaries appear in the final report.
 
 Keep searching if validation fails — you need real, verified sources.
 """
