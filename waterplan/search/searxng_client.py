@@ -26,8 +26,8 @@ _SEARXNG_PARAMS = {
 class SearXNGClient:
     """
     Client for a self-hosted SearXNG instance.
-    Run locally: docker run -d -p 8080:8080 searxng/searxng
-    No API key, no rate limits, aggregates Google/Bing/DDG/Wikipedia.
+    Run locally: cd searxng && docker compose up -d
+    No API key, no rate limits, aggregates Google/DDG/Wikipedia.
     """
 
     def __init__(
@@ -116,12 +116,12 @@ class SearXNGClient:
                     raise RuntimeError(
                         f"SearXNG returned HTTP {e.response.status_code}. "
                         "Is your SearXNG instance running? "
-                        f"docker run -d -p 8080:8080 searxng/searxng"
+                        f"cd searxng && docker compose up -d"
                     ) from e
             except httpx.ConnectError:
                 raise RuntimeError(
                     f"Cannot connect to SearXNG at {self._base_url}. "
-                    "Start it with: docker run -d -p 8080:8080 searxng/searxng"
+                    "Start it with: cd searxng && docker compose up -d"
                 )
             except Exception as e:
                 if attempt < 2:

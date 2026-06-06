@@ -13,12 +13,12 @@ git clone https://github.com/YOUR_USERNAME/waterplan-research
 cd waterplan-research
 
 pip install -r requirements.txt
-playwright install chromium   # for JS-heavy pages
+playwright install chromium   # downloads Chromium for JS-heavy page fallback
 
 cp .env.example .env
 # Edit .env and add your API keys
 
-python3 main.py "Mexicali, Mexico" "Monterrey, Mexico" "Chandler, Arizona, USA"
+python3 main.py research "Mexicali, Mexico" "Monterrey, Mexico" "Chandler, Arizona, USA"
 ```
 
 ---
@@ -40,7 +40,7 @@ OPENAI_API_KEY=sk-...
 
 ### SearXNG (optional, recommended for scale)
 
-By default the tool uses DuckDuckGo, which is rate-limited and unsuitable for large batches. SearXNG is a self-hosted metasearch engine that fans queries to Google, Bing, DuckDuckGo, and Wikipedia simultaneously — free, unlimited, no API key needed.
+By default the tool uses DuckDuckGo, which is rate-limited and unsuitable for large batches. SearXNG is a self-hosted metasearch engine that fans queries to Google, DuckDuckGo, and Wikipedia simultaneously — free, unlimited, no API key needed.
 
 ```bash
 cd searxng
@@ -58,7 +58,7 @@ The tool auto-detects SearXNG on `localhost:8080` — no config change needed. S
 brew install ollama
 ollama serve          # in a separate terminal
 ollama pull llama3.1
-python3 main.py "Mexicali, Mexico" --model llama3.1
+python3 main.py research "Mexicali, Mexico" --model llama3.1
 ```
 
 ---
@@ -67,32 +67,36 @@ python3 main.py "Mexicali, Mexico" --model llama3.1
 
 ```bash
 # Research 3 locations with default model (claude-sonnet-4-6)
-python3 main.py "Mexicali, Mexico" "Monterrey, Mexico" "Chandler, Arizona, USA"
+python3 main.py research "Mexicali, Mexico" "Monterrey, Mexico" "Chandler, Arizona, USA"
 
 # Use a specific model
-python3 main.py "Mexicali, Mexico" --model gpt-4o
-python3 main.py "Mexicali, Mexico" --model claude-haiku-4-5-20251001
-python3 main.py "Mexicali, Mexico" --model llama3.1   # requires Ollama
+python3 main.py research "Mexicali, Mexico" --model gpt-5-mini
+python3 main.py research "Mexicali, Mexico" --model gpt-4o
+python3 main.py research "Mexicali, Mexico" --model claude-haiku-4-5-20251001
+python3 main.py research "Mexicali, Mexico" --model llama3.1   # requires Ollama
 
 # Compare all models side-by-side
-python3 main.py "Mexicali, Mexico" --compare-models
+python3 main.py research "Mexicali, Mexico" --compare-models
 
 # Save output
-python3 main.py "Mexicali, Mexico" --output report.md
-python3 main.py "Mexicali, Mexico" --output report.csv
-python3 main.py "Mexicali, Mexico" --output report.pdf
+python3 main.py research "Mexicali, Mexico" --output report.md
+python3 main.py research "Mexicali, Mexico" --output report.csv
+python3 main.py research "Mexicali, Mexico" --output report.pdf
 
 # Batch from file (one location per line)
-python3 main.py --locations-file locations.txt --concurrency 5
+python3 main.py research --locations-file locations.txt --concurrency 3
 
 # Skip cache for a fresh run
-python3 main.py "Mexicali, Mexico" --no-cache
+python3 main.py research "Mexicali, Mexico" --no-cache
 
 # Debug mode (shows agent tool calls)
-python3 main.py "Mexicali, Mexico" --verbose
+python3 main.py research "Mexicali, Mexico" --verbose
 
 # Cache info
 python3 main.py cache-info
+
+# Show active search provider
+python3 main.py search-provider
 
 # List supported models
 python3 main.py models
@@ -170,7 +174,15 @@ Excerpt: "In a weekend plebiscite in the city of Mexicali, 76.1% of voters cast
 
 ### Why LangChain?
 
-LangChain provides a single `BaseChatModel` interface that works identically for Claude, GPT-4, and Ollama. The agent loop, tool definitions, and prompts are **provider-agnostic** — only the model instantiation changes (one line in `config.py`). This makes the tool genuinely portable and allows meaningful multi-model comparison.
+**Provider abstraction.** LangChain's `BaseChatModel` interface works identically for Claude, GPT-4, and Ollama. Every provider speaks a different wire protocol (Anthropic's Messages API, OpenAI's Chat Completions API, Ollama's local HTTP endpoint), but `BaseChatModel` normalizes them into one interface. Switching from `gpt-4o` to `claude-sonnet-4-6` to `llama3.1` is one argument change — the agent loop, tools, and prompts are completely untouched.
+
+**Tool calling is automatic.** The `@tool` decorator on each function generates a JSON schema from the Python type annotations and docstring, then passes that schema to the model via the provider's native tool-use mechanism (OpenAI's `function_call`, Anthropic's `tool_use` blocks, etc.). Without LangChain, you'd write this schema by hand for each provider and maintain them in sync. With LangChain, the schema is always derived from the actual function signature — it can't drift.
+
+**LangGraph handles the ReAct loop.** `create_react_agent` from LangGraph wires the think → act → observe cycle into a directed graph with built-in cycle detection, configurable recursion limits, and full message history. Writing this loop from scratch against raw provider APIs means hand-rolling the message accumulation, tool-result injection, and loop termination — and doing it differently for each provider's message format. LangGraph makes this consistent and observable.
+
+**The comparison is meaningful because the conditions are identical.** Because every model runs through the same agent graph, the same tool implementations, the same prompts, and the same validation pipeline, the multi-model comparison table reflects genuine model capability differences — not implementation differences. This would be impossible if each model had its own integration path.
+
+**Streaming, retries, and callbacks come for free.** `ChatOpenAI(max_retries=3)` and `ChatAnthropic(max_retries=3)` both honor the same interface, so retry logic is configured once and applies everywhere. LangChain's callback system provides a uniform hook for logging, tracing, and cost tracking across all providers without provider-specific instrumentation.
 
 ### Search Provider (pluggable)
 
@@ -185,27 +197,24 @@ The tool auto-selects the best available provider via a priority chain:
 
 **For scale:** start SearXNG locally and it's auto-detected — no config change needed:
 ```bash
-docker run -d -p 8080:8080 searxng/searxng
+cd searxng && docker compose up -d
 python3 main.py search-provider   # confirms SearXNG is active
 ```
 
-SearXNG is a self-hosted metasearch engine: it fans your query out to Google, Bing, DuckDuckGo, and Wikipedia simultaneously from your own IP, returning aggregated JSON with no API key or rate limits.
+SearXNG is a self-hosted metasearch engine that fans queries to Google, DuckDuckGo, and Wikipedia simultaneously from your own IP, returning aggregated results with no API key or rate limits. If SearXNG's upstream engines are temporarily rate-limited, the tool automatically falls back to the DuckDuckGo client.
 
-### Cross-Model Tool Calling Strategy
+### Agent Loop
 
-Not all models support structured tool calling. The agent auto-detects capability at runtime:
+The agent uses LangGraph's `create_react_agent` with 4 tools, enforcing a strict workflow per location:
 
-1. **Tool calling** (`claude-sonnet`, `claude-haiku`, `gpt-4o`, `gpt-4o-mini`, `llama3.1`): Uses LangChain's `create_tool_calling_agent` — the model receives structured tool schemas and returns structured tool calls.
-2. **ReAct fallback** (older Ollama models): Uses `create_react_agent` — text-based Thought/Action/Observation loop with the same tool set. Same validation guarantees, different interaction pattern.
-
-The agent flow for each location:
 ```
-search_water_risk (×2 queries)
+search_water_risk (×2 queries per dimension)
   → fetch_and_validate (each URL)
-    → record_finding (only if validated)
-      × repeat for incidents and regulations
-        → finish_research (only if ≥2 sources/dim)
+    → record_finding (only if excerpt validated)
+      → finish_research (only when ≥2 sources per dimension)
 ```
+
+All models — Claude, GPT, and Ollama — use the same agent graph. LangChain's `BaseChatModel` interface handles provider differences transparently.
 
 ### Validation Pipeline
 
@@ -231,7 +240,7 @@ For JS-heavy pages (SPAs, Next.js, Angular), the fetcher automatically escalates
 
 4. **Two-source minimum enforced by tool logic**: `finish_research` returns an error to the model if any dimension has fewer than 2 sources, forcing continued searching. The model cannot "finish" with incomplete evidence.
 
-5. **Independent cross-model judge**: The self-critique step always uses `claude-haiku-4-5-20251001` regardless of which model did the research. This prevents the main model from scoring its own outputs favorably. The judge evaluates relevance, recency, and authority per source.
+5. **Independent cross-model judge**: The self-critique step uses the cheapest available model (`gpt-4o-mini` if OpenAI key is set, otherwise `claude-haiku`) as an independent judge — never the same model that did the research. This prevents self-serving quality scores.
 
 6. **Failures surfaced, not swallowed**: Every failure produces a labeled `❌ FAILED VALIDATION` entry in the report. Reports are always produced even if partial, so the human reader sees exactly which claims are verified vs. unverified. No silent drops.
 
@@ -239,18 +248,22 @@ For JS-heavy pages (SPAs, Next.js, Angular), the fetcher automatically escalates
 
 ## Scalability
 
-**1,000 locations requires no new infrastructure.** The real bottleneck is LLM token rate limits and web fetch latency — not compute. A single machine with `--concurrency 20` runs ~1,000 locations in roughly 1 hour, streaming results to CSV as they complete.
+**1,000 locations requires no new infrastructure.** The real bottleneck is LLM token rate limits and web fetch latency — not compute. From benchmarks: 20 locations at concurrency 3 completes in ~20 minutes (~175s avg per location), putting 1,000 locations at around 2.5 hours at concurrency 3.
 
 ```bash
-# Run 1,000 locations from a file, 20 in parallel, save to CSV
-python3 main.py research --locations-file locations.txt --concurrency 20 --output results.csv
+# Run 1,000 locations from a file, save to CSV
+python3 main.py research --locations-file locations.txt --concurrency 3 --output results.csv
 ```
+
+**Recommended concurrency by model:**
+- `gpt-5-mini` (500k TPM): concurrency 3–5
+- `gpt-4o-mini` (200k TPM): concurrency 2–3
+- `claude-*` models: concurrency 3–5
+- Ollama (local): concurrency 1–2 (CPU-bound)
 
 If you need more throughput, run this on a VM (`c5.xlarge` or equivalent at ~$0.17/hr) rather than your laptop. No additional services required.
 
 **Search at scale:** The local SearXNG docker instance works for single-machine batches. If running across multiple machines, deploy SearXNG as a shared service and point all workers at it via `SEARXNG_URL=https://your-searxng-host`. Alternatively, Brave Search API (2,000 free/month) or Serper.dev ($0.001/query) both work via environment variable with no code changes.
-
-**Rate limiting built in:** DuckDuckGo client retries with exponential backoff. LLM calls via LangChain handle provider rate limits natively.
 
 ---
 
@@ -260,7 +273,8 @@ If you need more throughput, run this on a VM (`c5.xlarge` or equivalent at ~$0.
 |-----------|----------|
 | JS-rendered pages | `httpx` → Playwright headless fallback |
 | Bot protection | Realistic User-Agent + headers; graceful degradation to `FAILED VALIDATION` |
-| Rate limiting (DDG) | Exponential backoff, 3 retries |
+| Search engine rate limits | SearXNG auto-falls back to DuckDuckGo client when upstream engines are suspended |
+| LLM rate limits (429) | `max_retries=3` on model + 30s retry at location level + staggered concurrent starts |
 | Model unavailable | Exception caught, labeled error in output — run continues |
 | Validation failure | Source flagged `❌`, research continues for alternatives |
 | No data available | Dimension summary set to "Data not available" with confidence 0.0 |
@@ -293,17 +307,26 @@ python3 -m pytest tests/ -v
 ```
 waterplan-research/
 ├── main.py                  # CLI entrypoint
+├── locations.txt            # Example batch input file
+├── searxng/                 # Self-hosted SearXNG (docker compose up -d)
+│   ├── docker-compose.yml
+│   └── core-config/
+│       └── settings.yml
 ├── waterplan/
 │   ├── config.py            # Settings + model factory (get_model())
 │   ├── cli.py               # Typer CLI commands
 │   ├── models/schemas.py    # All Pydantic data models
 │   ├── agent/
-│   │   ├── research_agent.py  # LangChain agent builder + runner
+│   │   ├── research_agent.py  # LangGraph agent runner
 │   │   ├── tools.py           # @tool functions: search, validate, record, finish
-│   │   ├── prompts.py         # System prompt + ReAct prompt template
+│   │   ├── prompts.py         # System prompt
 │   │   └── self_critic.py     # Cross-model source quality judge
 │   ├── search/
-│   │   ├── ddg_client.py      # DuckDuckGo search (free, no API key)
+│   │   ├── provider.py        # Auto-selects best available search provider
+│   │   ├── searxng_client.py  # SearXNG client with DDG fallback
+│   │   ├── ddg_client.py      # DuckDuckGo (free, no API key)
+│   │   ├── brave_client.py    # Brave Search API
+│   │   ├── serper_client.py   # Serper.dev
 │   │   └── query_builder.py   # Dimension-specific query templates
 │   ├── validation/
 │   │   ├── fetcher.py         # httpx + Playwright fallback fetcher
@@ -327,8 +350,9 @@ waterplan-research/
 |-------|----------|-------|
 | `claude-sonnet-4-6` | Anthropic | Default. Best quality. |
 | `claude-haiku-4-5-20251001` | Anthropic | Fastest Claude, cheapest |
+| `gpt-5-mini` | OpenAI | 500k TPM Tier 1 — recommended for batches |
 | `gpt-4o` | OpenAI | Best OpenAI quality |
-| `gpt-4o-mini` | OpenAI | Fast, cheap OpenAI |
+| `gpt-4o-mini` | OpenAI | Fast, cheap (200k TPM Tier 1) |
 | `llama3.1` | Ollama (local) | Requires `ollama pull llama3.1` |
 | `qwen2.5` | Ollama (local) | Requires `ollama pull qwen2.5` |
-| `mistral` | Ollama (local) | ReAct fallback mode |
+| `mistral` | Ollama (local) | Requires `ollama pull mistral` |
